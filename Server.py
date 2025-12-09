@@ -1,62 +1,90 @@
 import socket
+import threading
 import os
 
-SERVER_IP = "YOUR_AZURE_VM_IP" # <--- Update this!
+# CONFIGURATION
+HOST = '0.0.0.0'
 PORT = 5001
 ACCESS_KEY = "SuperSecretKey123"
+STORAGE_DIR = "shared_files"
 
-client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-client.connect((SERVER_IP, PORT))
+# Create storage directory if it doesn't exist
+if not os.path.exists(STORAGE_DIR):
+    os.makedirs(STORAGE_DIR)
 
-# 1. AUTHENTICATION
-msg = client.recv(1024).decode()
-if msg == "AUTH":
-    client.send(ACCESS_KEY.encode())
-    response = client.recv(1024).decode()
-    if response == "REJECT":
-        print("Wrong password!")
-        exit()
-    print("Connected to Group Server!")
+def handle_client(conn, addr):
+    print(f"[+] New connection from {addr}")
+    
+    try:
+        # 1. AUTHENTICATION
+        conn.send("AUTH".encode())
+        password = conn.recv(1024).decode()
+        
+        if password != ACCESS_KEY:
+            conn.send("REJECT".encode())
+            print(f"[-] {addr} failed authentication.")
+            conn.close()
+            return
+        
+        conn.send("OK".encode())
+        
+        # 2. COMMAND LOOP
+        while True:
+            # Wait for command (e.g., "UPLOAD file.txt" or "LIST")
+            request = conn.recv(1024).decode()
+            if not request: break
+            
+            command, *args = request.split()
+            
+            if command == "UPLOAD":
+                filename = args[0]
+                file_size = int(args[1])
+                conn.send("READY".encode())
+                
+                # Receive file data
+                filepath = os.path.join(STORAGE_DIR, filename)
+                received = 0
+                with open(filepath, "wb") as f:
+                    while received < file_size:
+                        chunk = conn.recv(4096)
+                        if not chunk: break
+                        f.write(chunk)
+                        received += len(chunk)
+                print(f"[+] Received {filename} from {addr}")
+                
+            elif command == "LIST":
+                # Send list of available files
+                files = os.listdir(STORAGE_DIR)
+                conn.send(str(files).encode())
+                
+            elif command == "DOWNLOAD":
+                filename = args[0]
+                filepath = os.path.join(STORAGE_DIR, filename)
+                if os.path.exists(filepath):
+                    filesize = os.path.getsize(filepath)
+                    conn.send(f"EXISTS {filesize}".encode())
+                    
+                    # Send file data
+                    with open(filepath, "rb") as f:
+                        while True:
+                            chunk = f.read(4096)
+                            if not chunk: break
+                            conn.send(chunk)
+                else:
+                    conn.send("ERROR".encode())
+
+    except Exception as e:
+        print(f"Error with {addr}: {e}")
+    finally:
+        conn.close()
+
+# MAIN SERVER LOOP
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.bind((HOST, PORT))
+server.listen()
+print(f"[*] Group File Server Listening on {PORT}...")
 
 while True:
-    action = input("Enter command (upload <file> | download <file> | list): ").strip().split()
-    cmd = action[0].upper()
-
-    if cmd == "UPLOAD":
-        filename = action[1]
-        if os.path.exists(filename):
-            filesize = os.path.getsize(filename)
-            client.send(f"UPLOAD {filename} {filesize}".encode())
-            
-            # Wait for server ready
-            client.recv(1024) 
-            
-            with open(filename, "rb") as f:
-                while True:
-                    chunk = f.read(4096)
-                    if not chunk: break
-                    client.send(chunk)
-            print("Upload Complete.")
-        else:
-            print("File not found!")
-
-    elif cmd == "LIST":
-        client.send("LIST".encode())
-        print("Files on server:", client.recv(4096).decode())
-
-    elif cmd == "DOWNLOAD":
-        filename = action[1]
-        client.send(f"DOWNLOAD {filename}".encode())
-        response = client.recv(1024).decode().split()
-        
-        if response[0] == "EXISTS":
-            filesize = int(response[1])
-            received = 0
-            with open(f"downloaded_{filename}", "wb") as f:
-                while received < filesize:
-                    chunk = client.recv(4096)
-                    f.write(chunk)
-                    received += len(chunk)
-            print("Download Complete.")
-        else:
-            print("File does not exist on server.")
+    conn, addr = server.accept()
+    thread = threading.Thread(target=handle_client, args=(conn, addr))
+    thread.start()
