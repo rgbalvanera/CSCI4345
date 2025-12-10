@@ -1,48 +1,99 @@
+#this file should never be executed directly
+#it exists solely to see what code is on the server side in our azure vm
+# to run the server code perform the following command in terminal:
+# ssh -i path/tofile/NetworksFinal_key.pem <your-username>@<your-vm-ip-address>
+# for <your-username>@<your-vm-ip-address> it can be replaced with azureazureuser@20.64.230.82
+# next run:
+# python3 server.py
+# after running the server code you can then run the client code on your local machine
+
 import socket
 import threading
 import os
+import json
+import time
 
-# CONFIGURATION
+# --- CONFIGURATION ---
 HOST = '0.0.0.0'
 PORT = 5001
-ACCESS_KEY = "SuperSecretKey123"
-STORAGE_DIR = "shared_files"
+BASE_STORAGE_DIR = "shared_files"
+DB_FILE = "groups.json"
 
-# Create storage directory if it doesn't exist
-if not os.path.exists(STORAGE_DIR):
-    os.makedirs(STORAGE_DIR)
+# --- DATABASE HELPERS ---
+def load_groups():
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_groups(groups_dict):
+    with open(DB_FILE, "w") as f:
+        json.dump(groups_dict, f)
+
+GROUPS = load_groups()
+
+if not os.path.exists(BASE_STORAGE_DIR):
+    os.makedirs(BASE_STORAGE_DIR)
 
 def handle_client(conn, addr):
-    print(f"[+] New connection from {addr}")
+    print(f"[+] Connection attempt from {addr}")
+    current_group_path = None
     
     try:
-        # 1. AUTHENTICATION
         conn.send("AUTH".encode())
-        password = conn.recv(1024).decode()
+        request_data = conn.recv(1024).decode().strip()
         
-        if password != ACCESS_KEY:
-            conn.send("REJECT".encode())
-            print(f"[-] {addr} failed authentication.")
+        try:
+            tag, group_name, password = request_data.split(":")
+        except ValueError:
+            conn.send("INVALID_FORMAT".encode())
             conn.close()
             return
-        
-        conn.send("OK".encode())
-        
-        # 2. COMMAND LOOP
+
+        # REGISTER
+        if tag == "REGISTER":
+            if group_name in GROUPS:
+                conn.send("EXISTS".encode()) 
+            else:
+                GROUPS[group_name] = password
+                save_groups(GROUPS) 
+                group_path = os.path.join(BASE_STORAGE_DIR, group_name)
+                if not os.path.exists(group_path):
+                    os.makedirs(group_path)
+                conn.send("CREATED".encode())
+                print(f"[+] Created group: {group_name}")
+            conn.close()
+            return
+
+        # LOGIN
+        elif tag == "LOGIN":
+            if group_name in GROUPS and GROUPS[group_name] == password:
+                conn.send("OK".encode())
+                print(f"[+] {addr} logged into: {group_name}")
+                current_group_path = os.path.join(BASE_STORAGE_DIR, group_name)
+                if not os.path.exists(current_group_path):
+                    os.makedirs(current_group_path)
+            else:
+                conn.send("REJECT".encode())
+                conn.close()
+                return
+
+        # COMMAND LOOP
         while True:
-            # Wait for command (e.g., "UPLOAD file.txt" or "LIST")
             request = conn.recv(1024).decode()
             if not request: break
             
-            command, *args = request.split()
+            parts = request.split()
+            if not parts: continue
+            
+            command = parts[0]
             
             if command == "UPLOAD":
-                filename = args[0]
-                file_size = int(args[1])
+                filename = parts[1]
+                file_size = int(parts[2])
                 conn.send("READY".encode())
                 
-                # Receive file data
-                filepath = os.path.join(STORAGE_DIR, filename)
+                filepath = os.path.join(current_group_path, filename)
                 received = 0
                 with open(filepath, "wb") as f:
                     while received < file_size:
@@ -50,27 +101,37 @@ def handle_client(conn, addr):
                         if not chunk: break
                         f.write(chunk)
                         received += len(chunk)
-                print(f"[+] Received {filename} from {addr}")
+                
+                conn.send("UPLOAD_COMPLETE".encode())
+                print(f"[+] Uploaded: {filename}")
                 
             elif command == "LIST":
-                # Send list of available files
-                files = os.listdir(STORAGE_DIR)
+                files = os.listdir(current_group_path)
                 conn.send(str(files).encode())
                 
             elif command == "DOWNLOAD":
-                filename = args[0]
-                filepath = os.path.join(STORAGE_DIR, filename)
+                filename = parts[1]
+                filepath = os.path.join(current_group_path, filename)
+                
+                print(f"DEBUG: Client requested '{filename}'")
+                print(f"DEBUG: Looking in path -> {filepath}")
+                
                 if os.path.exists(filepath):
                     filesize = os.path.getsize(filepath)
+                    print(f"DEBUG: File found! Size: {filesize}")
                     conn.send(f"EXISTS {filesize}".encode())
                     
-                    # Send file data
+                    
+                    time.sleep(0.1) 
+
+                    
                     with open(filepath, "rb") as f:
                         while True:
                             chunk = f.read(4096)
                             if not chunk: break
                             conn.send(chunk)
                 else:
+                    print(f"DEBUG: ERROR - FILE NOT FOUND")
                     conn.send("ERROR".encode())
 
     except Exception as e:
@@ -78,11 +139,12 @@ def handle_client(conn, addr):
     finally:
         conn.close()
 
-# MAIN SERVER LOOP
+# MAIN SERVER STARTUP
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) 
 server.bind((HOST, PORT))
 server.listen()
-print(f"[*] Group File Server Listening on {PORT}...")
+print(f"[*] Server Listening on {PORT}...")
 
 while True:
     conn, addr = server.accept()
