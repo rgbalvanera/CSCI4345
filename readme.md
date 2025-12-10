@@ -104,11 +104,8 @@ python3 server.py
 /NetworkProject
 │
 ├── server.py           # Runs on Azure. Handles storage, auth, and routing.
-├── client.py           # GUI Application for users.
+├── client.py           # GUI Application for users, ran locally
 ├── groups.json         # Database of Group Names & Passwords (Auto-generated).
-├── shared_files/       # Server storage folder (Auto-generated).
-│   ├── GroupA/         # Files for Group A
-│   └── GroupB/         # Files for Group B
 └── downloads/          # Local folder where client saves downloaded files.
 ```
 
@@ -120,3 +117,4 @@ This project demonstrates mastery of:
 2.  **Application Layer Protocols:** Designed a custom protocol for `UPLOAD`, `DOWNLOAD`, `LIST`, and `AUTH`.
 3.  **Race Conditions:** Solved networking timing issues using acknowledgments and buffer delays.
 4.  **Cloud Deployment:** Real-world implementation of IaaS.
+
