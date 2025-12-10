@@ -1,9 +1,3 @@
-Here is a professional **README.md** file for your project. You can copy-paste this directly into your GitHub repository or submit it as your report summary.
-
-It highlights the **Networking Concepts** you used (which professors love) and explains how to run the code.
-
-***
-
 # ☁️ Multi-Tenant Cloud File Sharing System
 
 **Course:** CSCI 4345 - Computer Networks  
